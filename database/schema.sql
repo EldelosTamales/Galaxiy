@@ -58,6 +58,7 @@ CREATE TABLE IF NOT EXISTS autor (
 CREATE TABLE IF NOT EXISTS libro (
     id_libro           INT          NOT NULL AUTO_INCREMENT,
     id_autor           INT          NOT NULL,
+    id_categoria       INT          NOT NULL,
     titulo             VARCHAR(255) NOT NULL,
     genero             VARCHAR(100)          DEFAULT NULL,
     anio_publicado     YEAR                  DEFAULT NULL,
@@ -65,6 +66,10 @@ CREATE TABLE IF NOT EXISTS libro (
     CONSTRAINT pk_libro   PRIMARY KEY (id_libro),
     CONSTRAINT fk_libro_autor FOREIGN KEY (id_autor)
         REFERENCES autor(id_autor)
+        ON UPDATE CASCADE
+        ON DELETE RESTRICT,
+    CONSTRAINT fk_libro_categoria FOREIGN KEY (id_categoria)
+        REFERENCES categoria(id_categoria)
         ON UPDATE CASCADE
         ON DELETE RESTRICT
 ) ENGINE=InnoDB;
@@ -127,7 +132,27 @@ CREATE TABLE IF NOT EXISTS contacto_bibliotecario (
 ) ENGINE=InnoDB;
 
 -- ----------------------------------------------------------
---  2.8 PRESTAMO
+--  2.8 ESTADISTICA
+-- ----------------------------------------------------------
+CREATE TABLE IF NOT EXISTS estadistica (
+    id_estadistica INT       NOT NULL AUTO_INCREMENT,
+    id_usuario     INT       NOT NULL,
+    total_prestamos INT           DEFAULT 0
+    COMMENT 'Total de préstamos registrados del usuario',
+    total_libros_leidos INT       DEFAULT 0
+    COMMENT 'Total de libros leídos (devueltos)',
+    categoria_favorita VARCHAR(100) DEFAULT NULL
+    COMMENT 'Categoría con más préstamos del usuario',
+    updated_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    CONSTRAINT pk_estadistica PRIMARY KEY (id_estadistica),
+    CONSTRAINT uq_usuario_estadistica UNIQUE (id_usuario),
+    CONSTRAINT fk_est_usuario FOREIGN KEY (id_usuario)
+        REFERENCES usuario(id_usuario)
+        ON UPDATE CASCADE ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+-- ----------------------------------------------------------
+--  2.9 PRESTAMO
 -- ----------------------------------------------------------
 CREATE TABLE IF NOT EXISTS prestamo (
     id_prestamo      INT  NOT NULL AUTO_INCREMENT,
@@ -149,7 +174,7 @@ CREATE TABLE IF NOT EXISTS prestamo (
 ) ENGINE=InnoDB;
 
 -- ----------------------------------------------------------
---  2.9 PRESTAMO_LIBRO  (tabla asociativa – relación N:M)
+--  2.10 PRESTAMO_LIBRO  (tabla asociativa – relación N:M)
 -- ----------------------------------------------------------
 CREATE TABLE IF NOT EXISTS prestamo_libro (
     id_prestamo INT NOT NULL,
@@ -171,6 +196,17 @@ CREATE TABLE IF NOT EXISTS prestamo_libro (
 -- Catálogo de estados
 INSERT INTO estado_prestamo (descripcion) VALUES ('activo'), ('devuelto');
 
+-- Categorías
+INSERT INTO categoria (nombre, descripcion) VALUES
+('Realismo mágico', 'Obras con elementos fantásticos en contexto realista'),
+('Novela', 'Obras de ficción de extensión larga'),
+('Cuento', 'Historias cortas de ficción'),
+('Histórica', 'Novelas basadas en hechos históricos'),
+('Ciencia Ficción', 'Obras con tecnología futura o ciencia especulativa'),
+('Misterio', 'Historias de intriga y enigmas'),
+('Poesía', 'Obras en verso'),
+('No Ficción', 'Obras basadas en hechos reales');
+
 -- Autores
 INSERT INTO autor (primer_nombre, segundo_nombre, primer_apellido, segundo_apellido, nacionalidad) VALUES
 ('Gabriel',  'José',    'García',   'Márquez',   'Colombiana'),
@@ -180,14 +216,14 @@ INSERT INTO autor (primer_nombre, segundo_nombre, primer_apellido, segundo_apell
 ('Jorge',    'Luis',    'Borges',   NULL,        'Argentina');
 
 -- Libros
-INSERT INTO libro (id_autor, titulo, genero, anio_publicado, cantidad_disponible) VALUES
-(1, 'Cien años de soledad',         'Realismo mágico', 1967, 5),
-(1, 'El amor en los tiempos del cólera', 'Novela',     1985, 3),
-(2, 'La casa de los espíritus',     'Novela',          1982, 4),
-(3, 'La ciudad y los perros',       'Novela',          1963, 2),
-(4, 'El nombre de la rosa',         'Histórica',       1980, 6),
-(5, 'Ficciones',                    'Cuento',          1944, 2),
-(5, 'El Aleph',                     'Cuento',          1949, 1);
+INSERT INTO libro (id_autor, id_categoria, titulo, genero, anio_publicado, cantidad_disponible) VALUES
+(1, 1, 'Cien años de soledad',         'Realismo mágico', 1967, 5),
+(1, 2, 'El amor en los tiempos del cólera', 'Novela',     1985, 3),
+(2, 2, 'La casa de los espíritus',     'Novela',          1982, 4),
+(3, 2, 'La ciudad y los perros',       'Novela',          1963, 2),
+(4, 4, 'El nombre de la rosa',         'Histórica',       1980, 6),
+(5, 3, 'Ficciones',                    'Cuento',          1944, 2),
+(5, 3, 'El Aleph',                     'Cuento',          1949, 1);
 
 -- Usuarios
 INSERT INTO usuario (primer_nombre, segundo_nombre, primer_apellido, segundo_apellido, fecha_registro) VALUES
@@ -204,6 +240,14 @@ INSERT INTO contacto_usuario (id_usuario, email, telefono) VALUES
 (3, 'luisa.martinez@email.com',  '0416-9876543'),
 (4, 'pedro.hernandez@email.com', '0424-4561237'),
 (5, 'sofia.ramirez@email.com',   '0426-3217654');
+
+-- Estadísticas de usuarios
+INSERT INTO estadistica (id_usuario, total_prestamos, total_libros_leidos, categoria_favorita) VALUES
+(1, 2, 1, 'Novela'),
+(2, 1, 1, 'Novela'),
+(3, 2, 2, 'Novela'),
+(4, 1, 1, 'Histórica'),
+(5, 1, 0, 'Cuento');
 
 -- Bibliotecarios
 INSERT INTO bibliotecario (primer_nombre, segundo_nombre, primer_apellido, segundo_apellido) VALUES
@@ -250,6 +294,9 @@ ALTER TABLE libro MODIFY COLUMN titulo VARCHAR(300) NOT NULL;
 
 -- Agregar índice para búsquedas frecuentes por título
 ALTER TABLE libro ADD INDEX idx_titulo (titulo);
+
+-- Agregar índice para categoría
+ALTER TABLE libro ADD INDEX idx_categoria (id_categoria);
 
 -- Agregar índice compuesto en préstamo (usuario + estado)
 ALTER TABLE prestamo ADD INDEX idx_usuario_estado (id_usuario, id_estado);
@@ -437,9 +484,11 @@ SELECT
     l.genero,
     l.anio_publicado,
     l.cantidad_disponible,
-    CONCAT(a.primer_nombre,' ',a.primer_apellido) AS autor
+    CONCAT(a.primer_nombre,' ',a.primer_apellido) AS autor,
+    c.nombre AS categoria
 FROM libro l
-JOIN autor a ON l.id_autor = a.id_autor;
+JOIN autor a ON l.id_autor = a.id_autor
+JOIN categoria c ON l.id_categoria = c.id_categoria;
 
 
 -- ============================================================
